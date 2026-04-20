@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. For commit guidelines, please refer to [Standard Version](https://github.com/conventional-changelog/standard-version).
 
+## v1.3.6
+
+ **BugFixes**:
+ - file watcher not working for files and not respecting line count (#2314)
+ - "source" type link shows up multiple times when adding sidebar links if user has multiple sources.
+ - JWT ES256 results in error (#2188)
+ - single file shares not loading editor text content (#2122)
+
 ## v1.3.5
 
  **Notes**:

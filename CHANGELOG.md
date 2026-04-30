@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. For commit guidelines, please refer to [Standard Version](https://github.com/conventional-changelog/standard-version).
 
+## v1.3.8
+
+ **BugFixes**:
+ - Quick download icon style after icon change.
+ - Missing error popup for resource creatoin actions (upload/create)
+ - EnforcedOtp login failure until restart (#2330)
+ - Thumbnails for Folders only display sporadically (#2353)
+ - Unwanted user scope change for users with non-default scopes (#2347)
+ - Fix sidebar source info totals (#2321) (#2322) (#982)
+ - Error uploading a large number of photos -- only 100 items get uploaded (#2348)
+
 ## v1.3.7
 
  **Notes**:

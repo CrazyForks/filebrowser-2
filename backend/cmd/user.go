@@ -44,6 +44,9 @@ func validateUserInfo(newDB bool) {
 		if updateTokens(user) {
 			updateUser = true
 		}
+		if updateShowToolsInSidebar(user) {
+			updateUser = true
+		}
 		adminUser := settings.Config.Auth.AdminUsername
 		adminPass := settings.Config.Auth.AdminPassword
 		if user.Username == adminUser && adminPass != "" && user.LoginMethod == users.LoginMethodPassword {
@@ -62,7 +65,7 @@ func validateUserInfo(newDB bool) {
 					logger.Fatalf("Unable to create automatic backup of database due to error: %v", err)
 				}
 			}
-			fields := []string{"Scopes", "SidebarLinks", "Tokens", "Permissions", "Preview", "ShowFirstLogin", "LoginMethod", "Version"}
+			fields := []string{"Scopes", "SidebarLinks", "Tokens", "Permissions", "Preview", "ShowFirstLogin", "LoginMethod", "Version", "ShowToolsInSidebar"}
 			if changePass {
 				fields = append(fields, "Password")
 			}
@@ -78,10 +81,12 @@ func updateUserScopes(user *users.User) bool {
 	newScopes := []users.SourceScope{}
 	seen := make(map[string]struct{})
 
-	// Build map for existing scopes by Name
+	// Build map of existing scopes keyed by canonical source path (DB may use path or display name).
 	existing := make(map[string]users.SourceScope)
 	for _, s := range user.Scopes {
-		existing[s.Name] = s
+		if info, ok := users.ResolveSourceKey(s.Name); ok {
+			existing[info.Path] = s
+		}
 	}
 
 	// Preserve order by using Config.Server.Sources
@@ -104,15 +109,28 @@ func updateUserScopes(user *users.User) bool {
 		seen[src.Path] = struct{}{}
 	}
 
-	// Preserve user-defined scopes not matching current sources, append to end
+	// Preserve explicit or legacy scopes not already merged (e.g. non-defaultEnabled sources, removed sources).
 	for _, s := range user.Scopes {
-		if _, ok := seen[s.Name]; !ok {
-			newScopes = append(newScopes, s)
+		if info, ok := users.ResolveSourceKey(s.Name); ok {
+			if _, already := seen[info.Path]; already {
+				continue
+			}
 		}
+		newScopes = append(newScopes, s)
 	}
 	changed := !reflect.DeepEqual(user.Scopes, newScopes)
 	user.Scopes = newScopes
 	return changed
+}
+
+// updateShowToolsInSidebar one-time defaults for legacy users (Version < CurrentUserMigrationVersion) from configured userDefaults.
+func updateShowToolsInSidebar(user *users.User) bool {
+	if user.Version >= 3 {
+		return false
+	}
+	user.ShowToolsInSidebar = true
+	user.Version = users.CurrentUserMigrationVersion
+	return true
 }
 
 func updateShowFirstLogin(user *users.User) bool {
@@ -129,7 +147,6 @@ func updatePermissions(user *users.User) bool {
 		return false
 	}
 	updateUser := true
-	user.Permissions.Download = true
 	// if any keys are true, set the permissions to true
 	if user.Perm.Api {
 		user.Permissions.Api = true
@@ -171,7 +188,7 @@ func updatePermissions(user *users.User) bool {
 		user.Permissions.Delete = true
 		updateUser = true
 	}
-	user.Version = 2
+	user.Version = users.CurrentUserMigrationVersion
 	if updateUser {
 		createBackup = true
 	}
@@ -205,11 +222,11 @@ func updateSidebarLinks(user *users.User) bool {
 	for _, link := range user.SidebarLinks {
 		if strings.HasPrefix(link.Category, "source") {
 			sourceLinksCount++
-			// Check if this source still exists
-			if link.SourceName != "" {
-				if _, ok := settings.Config.Server.SourceMap[link.SourceName]; ok {
-					validSourceLinksCount++
-				}
+			if link.SourceName == "" {
+				continue
+			}
+			if _, ok := users.ResolveSourceKey(link.SourceName); ok {
+				validSourceLinksCount++
 			}
 		}
 	}
@@ -221,8 +238,6 @@ func updateSidebarLinks(user *users.User) bool {
 
 	// If user has source links but NONE are valid, rebuild from their scopes
 	if validSourceLinksCount == 0 {
-		logger.Infof("User %s has %d stale source links, rebuilding from scopes", user.Username, sourceLinksCount)
-
 		// Remove all existing source links
 		newLinks := []users.SidebarLink{}
 		for _, link := range user.SidebarLinks {
@@ -231,25 +246,24 @@ func updateSidebarLinks(user *users.User) bool {
 			}
 		}
 
-		// Add new source links based on user's scopes
 		for _, scope := range user.Scopes {
-			if source, ok := settings.Config.Server.SourceMap[scope.Name]; ok {
-				// User has access to this source, add it to sidebar
-				newLinks = append(newLinks, users.SidebarLink{
-					Name:       source.Name,
-					Category:   "source",
-					Target:     "/",
-					Icon:       "",
-					SourceName: source.Path,
-				})
+			info, ok := users.ResolveSourceKey(scope.Name)
+			if !ok {
+				continue
 			}
+			newLinks = append(newLinks, users.SidebarLink{
+				Name:       info.Name,
+				Category:   "source",
+				Target:     "/",
+				Icon:       "",
+				SourceName: info.Path,
+			})
 		}
 
 		user.SidebarLinks = newLinks
 		return true
 	}
 
-	// User has at least one valid source link, no update needed
 	return false
 }
 
@@ -264,6 +278,6 @@ func updateTokens(user *users.User) bool {
 			user.Tokens[name] = token
 		}
 	}
-	user.Version = 2
+	user.Version = users.CurrentUserMigrationVersion
 	return true
 }

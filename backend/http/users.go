@@ -91,6 +91,7 @@ func userGetHandler(w http.ResponseWriter, r *http.Request, d *requestContext) (
 	return renderJSON(w, r, u)
 }
 
+// prepForFrontend strips secrets and maps source identifiers to display names for JSON (never expose paths).
 func prepForFrontend(u *users.User) {
 	u.Password = ""
 	u.ApiKeys = nil
@@ -99,29 +100,56 @@ func prepForFrontend(u *users.User) {
 	u.TOTPSecret = ""
 	u.TOTPNonce = ""
 	u.Scopes = u.GetFrontendScopes()
-	u.SidebarLinks = GetFrontendSidebarLinks(u.SidebarLinks)
+	u.SidebarLinks = GetFrontendSidebarLinks(u.SidebarLinks, u.ShowToolsInSidebar)
 	u.Locale = normalizeLocale(u.Locale)
+	for i := range u.PasskeyCredentials {
+		u.PasskeyCredentials[i].PublicKey = ""
+		u.PasskeyCredentials[i].AttestationType = ""
+		u.PasskeyCredentials[i].AttestationFormat = ""
+		u.PasskeyCredentials[i].Flags = users.WebAuthnCredentialFlags{}
+		u.PasskeyCredentials[i].SignCount = 0
+		u.PasskeyCredentials[i].ClientDataJSON = ""
+		u.PasskeyCredentials[i].ClientDataHash = ""
+		u.PasskeyCredentials[i].AuthenticatorData = ""
+		u.PasskeyCredentials[i].PublicKeyAlg = 0
+		u.PasskeyCredentials[i].AttestationObj = ""
+	}
 }
 
-// GetFrontendSidebarLinks converts the user's sidebar links from backend-style to frontend-style
-// Converts source paths to source names for the frontend
-func GetFrontendSidebarLinks(links []users.SidebarLink) []users.SidebarLink {
+// GetFrontendSidebarLinks converts the user's sidebar links from backend-style to frontend-style:
+func GetFrontendSidebarLinks(links []users.SidebarLink, showToolsInSidebar bool) []users.SidebarLink {
+	if !users.SourceConfigLoaded() {
+		return []users.SidebarLink{}
+	}
+	hasTools := false
 	newLinks := []users.SidebarLink{}
 	for _, link := range links {
-		// For source links, validate that the source still exists
 		if strings.HasPrefix(link.Category, "source") {
-			source, ok := settings.Config.Server.SourceMap[link.SourceName]
+			if link.SourceName == "" {
+				continue
+			}
+			source, ok := users.ResolveSourceKey(link.SourceName)
 			if !ok {
 				continue
 			}
-			if source.Config.ResolvedRules.IndexingDisabled && link.Category != "source-minimal" {
-				link.Category = "source-alt"
+			if full, ok := settings.Config.Server.SourceMap[source.Path]; ok {
+				if full.Config.ResolvedRules.IndexingDisabled && link.Category != "source-minimal" {
+					link.Category = "source-alt"
+				}
 			}
 			link.SourceName = source.Name
+		} else if link.Category == "tool" && link.Target == "/tools" {
+			hasTools = true
 		}
-		// For share links, just pass through (shares are validated separately)
-		// For all other links, pass through as-is
 		newLinks = append(newLinks, link)
+	}
+	if !hasTools && showToolsInSidebar {
+		newLinks = append(newLinks, users.SidebarLink{
+			Name:     "Tools",
+			Category: "tool",
+			Target:   "/tools",
+			Icon:     "build",
+		})
 	}
 	return newLinks
 }

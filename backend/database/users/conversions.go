@@ -5,6 +5,23 @@ import (
 	"strings"
 )
 
+// ResolveSourceKey maps a string that is either:
+//   - the configured source filesystem path (canonical Bolt / in-memory form for
+//     SourceScope.Name and source-type SidebarLink.SourceName), or
+//   - the source display name (JSON form from clients).
+//
+// Path is checked first so absolute paths are unambiguous. Used on write paths
+// (normalize to Path) and read paths (normalize API to display Name).
+func ResolveSourceKey(key string) (SourceInfo, bool) {
+	if sourceConfig == nil || key == "" {
+		return SourceInfo{}, false
+	}
+	if info, ok := sourceConfig.GetSourceByPath(key); ok {
+		return info, true
+	}
+	return sourceConfig.GetSourceByName(key)
+}
+
 // GetSourceNames returns all source names the user has access to (assumes backend-style scopes)
 func (u *User) GetSourceNames() []string {
 	if sourceConfig == nil {
@@ -24,10 +41,9 @@ func (u *User) GetSourceNames() []string {
 	return sources
 }
 
-// GetBackendScopes converts the user's scopes from frontend-style to backend-style
+// GetBackendScopes normalizes scopes for Bolt: SourceScope.Name is always the source filesystem path.
+// Incoming rows (API) may use display name or path; legacy rows may use either.
 func (u *User) GetBackendScopes() ([]SourceScope, error) {
-	// Only convert scopes if they are not empty
-	// Empty scopes during update should remain empty (not filled with defaults)
 	if len(u.Scopes) == 0 {
 		return []SourceScope{}, nil
 	}
@@ -37,24 +53,8 @@ func (u *User) GetBackendScopes() ([]SourceScope, error) {
 
 	newScopes := []SourceScope{}
 	for _, scope := range u.Scopes {
-		// First check if its already a path name and keep it
-		source, ok := sourceConfig.GetSourceByPath(scope.Name)
-		if ok {
-			if scope.Scope == "" {
-				scope.Scope = source.DefaultUserScope
-			}
-			scope.Scope = normalizeScope(scope.Scope)
-			newScopes = append(newScopes, SourceScope{
-				Name:  source.Path, // backend name is path
-				Scope: scope.Scope,
-			})
-			continue
-		}
-
-		// Check if its the name of a source and convert it to a path
-		source, ok = sourceConfig.GetSourceByName(scope.Name)
+		source, ok := ResolveSourceKey(scope.Name)
 		if !ok {
-			// source might no longer be configured
 			continue
 		}
 		if scope.Scope == "" {
@@ -62,15 +62,15 @@ func (u *User) GetBackendScopes() ([]SourceScope, error) {
 		}
 		scope.Scope = normalizeScope(scope.Scope)
 		newScopes = append(newScopes, SourceScope{
-			Name:  source.Path, // backend name is path
+			Name:  source.Path,
 			Scope: scope.Scope,
 		})
 	}
 	return newScopes, nil
 }
 
-// GetFrontendScopes converts the user's scopes from backend-style to frontend-style
-// Backend scopes use source paths, frontend scopes use source names
+// GetFrontendScopes converts scopes for JSON clients: SourceScope.Name is always the source display name.
+// Assumes Bolt stores paths (GetBackendScopes); unknown keys are omitted.
 func (u *User) GetFrontendScopes() []SourceScope {
 	if sourceConfig == nil {
 		return []SourceScope{}
@@ -78,19 +78,19 @@ func (u *User) GetFrontendScopes() []SourceScope {
 
 	newScopes := []SourceScope{}
 	for _, scope := range u.Scopes {
-		if source, ok := sourceConfig.GetSourceByPath(scope.Name); ok {
-			// Replace scope.Name with source.Name while keeping the same Scope value
-			newScopes = append(newScopes, SourceScope{
-				Name:  source.Name,
-				Scope: scope.Scope,
-			})
+		source, ok := ResolveSourceKey(scope.Name)
+		if !ok {
+			continue
 		}
+		newScopes = append(newScopes, SourceScope{
+			Name:  source.Name,
+			Scope: scope.Scope,
+		})
 	}
 	return newScopes
 }
 
-// GetBackendSidebarLinks converts the user's sidebar links from frontend-style to backend-style
-// Validates that sources exist and converts source names to paths
+// GetBackendSidebarLinks normalizes source links for Bolt: SourceName is the filesystem path.
 func (u *User) GetBackendSidebarLinks() ([]SidebarLink, error) {
 	if sourceConfig == nil {
 		return nil, fmt.Errorf("source config not initialized")
@@ -98,7 +98,6 @@ func (u *User) GetBackendSidebarLinks() ([]SidebarLink, error) {
 
 	newLinks := []SidebarLink{}
 	for _, link := range u.SidebarLinks {
-		// For source links, validate that the source exists using SourceName
 		if strings.HasPrefix(link.Category, "source") {
 			if link.SourceName == "" {
 				return nil, fmt.Errorf("source link missing sourceName (link name: %v)", link.Name)
@@ -115,7 +114,6 @@ func (u *User) GetBackendSidebarLinks() ([]SidebarLink, error) {
 				link.SourceName = sourceInfo2.Path
 			}
 		}
-		// Store the link as-is with all fields preserved
 		newLinks = append(newLinks, link)
 	}
 	return newLinks, nil

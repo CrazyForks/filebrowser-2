@@ -134,6 +134,7 @@ func withHashFileHelper(fn handleFunc) handleFunc {
 			AlbumArt:                 strings.Contains(r.URL.Path, "/preview"),
 			ExtractEmbeddedSubtitles: settings.Config.Integrations.Media.ExtractEmbeddedSubtitles && link.ExtractEmbeddedSubtitles,
 			ShowHidden:               link.ShowHidden,
+			HideFileExt:	          link.HideFileExt,
 			FollowSymlinks:           true,
 		}, store.Access, data.shareUser, store.Share)
 		if err != nil {
@@ -834,8 +835,8 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		}
 		duration := time.Since(start)
 
-		// Use the StatusCode from wrappedWriter, which might have been set to 500 by the recover logic
-		logger.Api(wrappedWriter.StatusCode,
+		// ApiPathExclude is applied per logging sink inside go-logger (logger.ApiPath).
+		logger.ApiPath(wrappedWriter.StatusCode, fullURL,
 			fmt.Sprintf("%-7s | %3d | %-15s | %-12s | %-12s | \"%s\"",
 				r.Method,
 				wrappedWriter.StatusCode,

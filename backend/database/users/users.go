@@ -7,7 +7,8 @@ import (
 	jwt "github.com/golang-jwt/jwt/v4"
 )
 
-const ()
+// CurrentUserMigrationVersion is persisted for newly created accounts and after legacy migrations finish.
+const CurrentUserMigrationVersion = 3
 
 type LoginMethod string
 
@@ -18,6 +19,35 @@ const (
 	LoginMethodLdap     LoginMethod = "ldap"
 	LoginMethodJwt      LoginMethod = "jwt"
 )
+
+// WebAuthnCredentialFlags mirrors the boolean flags from authenticator data.
+type WebAuthnCredentialFlags struct {
+	UserPresent    bool `json:"userPresent"`
+	UserVerified   bool `json:"userVerified"`
+	BackupEligible bool `json:"backupEligible"`
+	BackupState    bool `json:"backupState"`
+}
+
+// WebAuthnCredential stores a single passkey credential in BoltDB-friendly format.
+type WebAuthnCredential struct {
+	ID                string                  `json:"id"`
+	PublicKey         string                  `json:"publicKey"`
+	AttestationType   string                  `json:"attestationType"`
+	AttestationFormat string                  `json:"attestationFormat"`
+	Transport         []string                `json:"transport"`
+	Flags             WebAuthnCredentialFlags `json:"flags"`
+	AAGUID            string                  `json:"aaguid"`
+	SignCount         uint32                  `json:"signCount"`
+	CloneWarning      bool                    `json:"cloneWarning"`
+	Name              string                  `json:"name"`
+	CreatedAt         int64                   `json:"createdAt"`
+	LastUsedAt        int64                   `json:"lastUsedAt"`
+	ClientDataJSON    string                  `json:"clientDataJSON"`
+	ClientDataHash    string                  `json:"clientDataHash"`
+	AuthenticatorData string                  `json:"authenticatorData"`
+	PublicKeyAlg      int64                   `json:"publicKeyAlg"`
+	AttestationObj    string                  `json:"attestationObj"`
+}
 
 type AuthToken struct {
 	MinimalAuthToken
@@ -66,30 +96,31 @@ type Preview struct {
 	Models             bool `json:"models"`             // show live thumbnails for 3D models files
 }
 
-// User describes a user.
+// User describes a persisted account. Scopes and source sidebar links store filesystem paths in Name/SourceName;
+// JSON responses use display names only (see http prepForFrontend).
 type User struct {
 	NonAdminEditable
-	DisableSettings bool                 `json:"disableSettings"`
-	ID              uint                 `storm:"id,increment" json:"id"`
-	Username        string               `storm:"unique" json:"username"`
-	Scopes          []SourceScope        `json:"scopes"`
-	Scope           string               `json:"scope,omitempty"`
-	LockPassword    bool                 `json:"lockPassword"`
-	Permissions     Permissions          `json:"permissions"`
-	ApiKeys         map[string]AuthToken `json:"apiKeys,omitempty"` // deprecated: use Tokens instead
-	Tokens          map[string]AuthToken `json:"tokens,omitempty"`
-	TOTPSecret      string               `json:"totpSecret,omitempty"`
-	TOTPNonce       string               `json:"totpNonce,omitempty"`
-	LoginMethod     LoginMethod          `json:"loginMethod"`
-	OtpEnabled      bool                 `json:"otpEnabled"` // true if TOTP is enabled, false otherwise
-	Version         int                  `json:"version"`
+	DisableSettings      bool                  `json:"disableSettings"`
+	ID                   uint                  `storm:"id,increment" json:"id"`
+	Username             string                `storm:"unique" json:"username"`
+	Scopes               []SourceScope         `json:"scopes"`
+	Scope                string                `json:"scope,omitempty"`
+	LockPassword         bool                  `json:"lockPassword"`
+	Permissions          Permissions           `json:"permissions"`
+	ApiKeys              map[string]AuthToken  `json:"apiKeys,omitempty"` // deprecated: use Tokens instead
+	Tokens               map[string]AuthToken  `json:"tokens,omitempty"`
+	TOTPSecret           string                `json:"totpSecret,omitempty"`
+	TOTPNonce            string                `json:"totpNonce,omitempty"`
+	LoginMethod          LoginMethod           `json:"loginMethod"`
+	OtpEnabled           bool                  `json:"otpEnabled"` // true if TOTP is enabled, false otherwise
+	Version              int                   `json:"version"`
 	// legacy for migration purposes... og filebrowser has perm attribute
 	Perm Permissions `json:"perm,omitzero"` // deprecated: use Permissions instead
 }
 
 type SourceScope struct {
-	Name  string `json:"name"`
-	Scope string `json:"scope"`
+	Name  string `json:"name"`  // Bolt: filesystem path; JSON API: display name after prepForFrontend
+	Scope string `json:"scope"` // index path within that source
 }
 
 // json tags must match variable name with smaller case first letter
@@ -108,6 +139,7 @@ type NonAdminEditable struct {
 	SingleClick                bool          `json:"singleClick"` // open directory on single click, also enables middle click to open in new tab
 	Sorting                    Sorting       `json:"sorting"`
 	ShowHidden                 bool          `json:"showHidden"`                 // show hidden files in the UI. On windows this includes files starting with a dot and windows hidden files
+	HideFileExt                string        `json:"hideFileExt"`                // space separated list of file extensions to hide in UI and API
 	DateFormat                 bool          `json:"dateFormat"`                 // when false, the date is relative, when true, the date is an exact timestamp
 	GallerySize                int           `json:"gallerySize"`                // 0-9 - the size of the gallery thumbnails
 	ThemeColor                 string        `json:"themeColor"`                 // theme color to use: eg. #ff0000, or var(--red), var(--purple), etc
@@ -121,13 +153,15 @@ type NonAdminEditable struct {
 	CustomTheme                string        `json:"customTheme"`                // Name of theme to use chosen from custom themes config.
 	ShowSelectMultiple         bool          `json:"showSelectMultiple"`         // show select multiple files on desktop
 	ShowCopyPath               bool          `json:"showCopyPath"`               // show copy path action in the context menu
+	ShowToolsInSidebar         bool          `json:"showToolsInSidebar"`         // when false, sidebar hides links with category "tool" (default: true)
 	DebugOffice                bool          `json:"debugOffice"`                // debug onlyoffice editor
 	OtpEnabled                 bool          `json:"otpEnabled"`                 // allow non-admin users to disable their own OTP
 	SidebarLinks               []SidebarLink `json:"sidebarLinks"`               // customizable sidebar links
 	HideFilesInTree            bool          `json:"hideFilesInTree"`            // hide files in the sidebar tree navigation, when true, will show only directories.
 	DeleteAfterArchive         bool          `json:"deleteAfterArchive"`         // delete source files after successful creation/extraction of archives
 	PreferEditorForMarkdown    bool          `json:"preferEditorForMarkdown"`    // prefer editor first for markdown files instead of the Markdown Viewer
-	ShowFirstLogin             bool          `json:"showFirstLogin"`
+	ShowFirstLogin             bool                  `json:"showFirstLogin"`
+	PasskeyCredentials         []WebAuthnCredential  `json:"passkeyCredentials,omitempty"`
 }
 
 type FileLoading struct {
@@ -143,7 +177,7 @@ type SidebarLink struct {
 	Category   string `json:"category"`             // Category type: "source", "source-link", "share", "tool", "custom", etc.
 	Target     string `json:"target"`               // Target path/URL for the link (relative for source/share)
 	Icon       string `json:"icon"`                 // Material icon name
-	SourceName string `json:"sourceName,omitempty"` // Source identifier for source-type links
+	SourceName string `json:"sourceName,omitempty"` // Bolt: filesystem path. JSON out: display name (after prepForFrontend).
 }
 
 func CleanUsername(s string) string {
@@ -188,6 +222,11 @@ func SetSourceNameResolver(resolver SourceNameResolver) {
 // This should be called once during initialization by the settings package
 func SetSourceConfig(config *SourceConfigProvider) {
 	sourceConfig = config
+}
+
+// SourceConfigLoaded reports whether SetSourceConfig has been called (needed for ResolveSourceKey).
+func SourceConfigLoaded() bool {
+	return sourceConfig != nil
 }
 
 // GetScopeForSourcePath returns the scope for a given source path (backend-style)
